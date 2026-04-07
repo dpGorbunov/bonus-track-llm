@@ -16,12 +16,12 @@ Scope: Telegram-бот (AI-агент), взаимодействующий с б
 
 | # | Состояние | Назначение |
 |---|-----------|------------|
-| 0 | ROLE_SELECTION | Выбор роли: студент, абитуриент, бизнес, другое |
-| 1 | NL_PROFILING | Диалоговое профилирование через LLM (макс. 2 уточняющих вопроса) |
-| 2 | PROFILE_CONFIRM | Подтверждение извлеченного профиля (теги, цели, контекст) |
-| 3 | RECOMMENDATIONS | Генерация и показ рекомендаций (top-15) |
-| 4 | AGENT_MODE | Свободный диалог с вызовом инструментов |
-| 5 | EXPERT_FLOW | Слоты доступности и оценки экспертов (**planned**) |
+| 0 | CHOOSE_ROLE | Выбор роли: студент, абитуриент, бизнес, другое |
+| 1 | ONBOARD_NL_PROFILE | Диалоговое профилирование через LLM (макс. 2 уточняющих вопроса) |
+| 2 | ONBOARD_CONFIRM | Подтверждение извлеченного профиля (теги, цели, контекст) |
+| 3 | VIEW_PROGRAM | Генерация рекомендаций, показ программы, agent mode с инструментами |
+| 4 | VIEW_DETAIL | Детальный просмотр проекта |
+| 5 | NL_REBUILD | Перепрофилирование (возврат к NL-диалогу) |
 | 6 | SUPPORT_CHAT | Вопрос организатору через админку |
 
 Переход между состояниями - детерминированный (по кнопкам и командам). LLM работает внутри состояний, не управляет переходами.
@@ -85,23 +85,23 @@ Qdrant хранит эмбеддинги проектов (768d, Gemini embeddin
 /start
   |
   v
-ROLE_SELECTION -- кнопка роли --> NL_PROFILING
+CHOOSE_ROLE -- кнопка роли --> ONBOARD_NL_PROFILE
   |                                    |
   |                            LLM: уточняющий вопрос (до 2 раз)
   |                                    |
   |                                    v
-  |                            PROFILE_CONFIRM
+  |                            ONBOARD_CONFIRM
   |                            "Все верно" / "Заново"
   |                                    |
   |                                    v
-  |                            RECOMMENDATIONS
+  |                            VIEW_PROGRAM
   |                            embed(profile) -> Qdrant top-30
   |                            -> schedule_rerank -> LLM summaries
-  |                            -> top-15
+  |                            -> top-15, затем agent mode + tools
   |                                    |
   |                                    v
-  |                            AGENT_MODE
-  |                            свободный диалог + tools
+  |                            VIEW_DETAIL (при show_project)
+  |                            NL_REBUILD (при rebuild_profile)
   |
   +--- /start в любом состоянии --> сброс, повтор с начала
 ```
@@ -110,11 +110,11 @@ ROLE_SELECTION -- кнопка роли --> NL_PROFILING
 
 | Этап | Ошибка | Поведение |
 |------|--------|-----------|
-| NL_PROFILING | LLM timeout | Retry (3 попытки). При полном отказе - профилирование по кнопкам (без LLM) |
-| RECOMMENDATIONS | Qdrant недоступен | Fallback на tag overlap scoring |
-| RECOMMENDATIONS | LLM timeout (резюме) | Резюме = первые предложения описания проекта |
-| AGENT_MODE | Tool failure | Сообщение пользователю "Не удалось выполнить" + продолжение диалога |
-| AGENT_MODE | LLM timeout | Retry -> fallback model -> сообщение "Попробуйте позже" |
+| ONBOARD_NL_PROFILE | LLM timeout | Retry (3 попытки). При полном отказе - профилирование по кнопкам (без LLM) |
+| VIEW_PROGRAM (рекомендации) | Qdrant недоступен | Fallback на tag overlap scoring |
+| VIEW_PROGRAM (рекомендации) | LLM timeout (резюме) | Резюме = первые предложения описания проекта |
+| VIEW_PROGRAM (agent mode) | Tool failure | Сообщение пользователю "Не удалось выполнить" + продолжение диалога |
+| VIEW_PROGRAM (agent mode) | LLM timeout | Retry -> fallback model -> сообщение "Попробуйте позже" |
 
 Детали workflow с ветками ошибок - `diagrams/workflow.md`.
 
@@ -144,7 +144,7 @@ ROLE_SELECTION -- кнопка роли --> NL_PROFILING
 - **chat_history**: максимум 20 сообщений в `program_chat`. Старые обрезаются FIFO
 - **Системный промпт**: роль, профиль, список доступных инструментов. Не содержит PII
 - **Артефакты** (при show_project / compare_projects): передаются как user message, не system - для защиты от injection
-- **Context budget**: системный промпт (~2000 токенов) + tool definitions (~1500) + профиль + рекомендации (~2000) + история (до ~2600) + support_chat_history (~500) = ~8600 токенов. Лимит модели позволяет
+- **Context budget**: системный промпт (~400 токенов) + tool definitions (~1500) + профиль (~200) + рекомендации (~2000) + chat history (до ~4000 при 20 msg) + support_chat_history (~500) = ~8600 токенов в worst case. Лимит модели позволяет
 
 Детали - `specs/memory-context.md`.
 
@@ -210,6 +210,14 @@ conflict_penalty = -2.0 * (room_count - 1)  (штраф за конфликты 
 | `get_followup` | Пакет контактов автора проекта (с согласия) | default | гости |
 | `get_pipeline` | Воронка: заинтересован -> связались -> переговоры | default | бизнес |
 
+Таймауты Celery-задач (не инструменты, но влияют на UX):
+
+| Задача | Таймаут |
+|--------|---------|
+| `agent_chat_task` | 15 с |
+| `chat_for_profile_task` | 15 с |
+| `generate_recommendations_task` | 40 с |
+
 ### Планируемые инструменты
 
 | Инструмент | Назначение | Статус |
@@ -237,7 +245,7 @@ conflict_penalty = -2.0 * (room_count - 1)  (штраф за конфликты 
 
 | Ситуация | Поведение |
 |----------|-----------|
-| Timeout / network error | 3 retry с exponential backoff (`2^(attempt+1)` секунд: 4, 8, 16 с) |
+| Timeout / network error | 3 retry с exponential backoff (`2^(attempt+1)` секунд: 2, 4, 8 с при attempt=0,1,2) |
 | 429 (rate limit) / 503 (service unavailable) | Ротация на следующий ключ; cooldown 60 с для текущего |
 | 400 / 403 / 404 (model error) | Переключение на fallback-модель (`gpt-4o-mini`) |
 | Все ключи в cooldown + fallback недоступен | No-LLM degradation: детерминированные ответы, tag overlap вместо embedding |

@@ -249,7 +249,7 @@ LLM-диалог для сбора профиля. Промпт: `get_profile_ag
 ### Retry policy
 
 - MAX_RETRIES = 3
-- Exponential backoff: `wait = 2^(attempt + 1)` секунд (4s, 8s, 16s)
+- Exponential backoff: `wait = 2^(attempt + 1)` секунд (2s, 4s, 8s при attempt=0,1,2)
 - Key rotation: каждый retry может использовать другой API key
 
 ### Key rotation
