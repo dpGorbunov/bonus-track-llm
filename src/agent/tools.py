@@ -1,13 +1,14 @@
 """Tool implementations for the EventAI PydanticAI agent.
 
-Seven tools:
-- show_project     -- show details of one recommended project (by rank or name)
-- show_profile     -- show current user profile
-- compare_projects -- compare 2-5 projects via LLM-generated matrix
+Eight tools:
+- show_project      -- show details of one recommended project (by rank or name)
+- show_profile      -- show current user profile
+- compare_projects  -- compare 2-5 projects via LLM-generated matrix
 - generate_questions -- generate Q&A questions for a project
-- update_status    -- update project status in business pipeline
-- filter_projects  -- filter recommended projects by tag or technology
-- get_summary      -- follow-up (guest) or pipeline (business)
+- update_status     -- update project status in business pipeline
+- filter_projects   -- filter recommended projects by tag or technology
+- get_summary       -- follow-up (guest) or pipeline (business)
+- github_drilldown  -- GitHub repo analysis: metrics, files, tree, commits, contributors
 """
 
 import asyncio
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 def register_tools(agent: Agent[AgentDeps, str]) -> None:
-    """Register all 7 tools on the given agent instance."""
+    """Register all 8 tools on the given agent instance."""
 
     @agent.tool
     async def show_project(
@@ -299,6 +300,155 @@ def register_tools(agent: Agent[AgentDeps, str]) -> None:
         if deps.user.role_code == "business":
             return await _get_pipeline(deps)
         return await _get_followup(deps)
+
+    @agent.tool
+    async def github_drilldown(
+        ctx: RunContext[AgentDeps],
+        project_identifier: str,
+        query_type: str,
+        file_path: str | None = None,
+    ) -> str:
+        """Получить данные из GitHub-репозитория проекта.
+
+        query_type:
+        - "summary" - кэшированные метрики (коммиты, контрибьюторы, тесты, CI, red flags)
+        - "file" - содержимое файла (нужен file_path: "requirements.txt", "src/main.py")
+        - "tree" - структура файлов (file_path опционально для поддиректории)
+        - "commits" - последние 10 коммитов
+        - "contributors" - список контрибьюторов
+        """
+        deps = ctx.deps
+
+        VALID_TYPES = {"summary", "file", "tree", "commits", "contributors"}
+        if query_type not in VALID_TYPES:
+            return f"Допустимые типы: {', '.join(sorted(VALID_TYPES))}"
+
+        if query_type == "file" and not file_path:
+            return "Для просмотра файла укажите file_path."
+
+        # Resolve project
+        rec = None
+        try:
+            rank = int(project_identifier.strip().lstrip("#"))
+            rec = _find_recommendation(deps.recommendations, rank)
+        except ValueError:
+            pass
+
+        if not rec:
+            # name search
+            name_lower = project_identifier.strip().lower()
+            project_ids = [r.project_id for r in deps.recommendations]
+            if project_ids:
+                result = await deps.db.execute(
+                    select(Project).where(
+                        Project.id.in_(project_ids),
+                        func.lower(Project.title).contains(name_lower),
+                    )
+                )
+                matched = result.scalars().first()
+                if matched:
+                    rec = next(
+                        (r for r in deps.recommendations if r.project_id == matched.id),
+                        None,
+                    )
+
+        if not rec:
+            return f"Проект '{project_identifier}' не найден в рекомендациях."
+
+        result = await deps.db.execute(
+            select(Project).where(Project.id == rec.project_id)
+        )
+        project = result.scalar_one_or_none()
+        if not project or not project.github_url:
+            return f"У проекта {project.title if project else '?'} нет GitHub-репозитория."
+
+        from src.services.github_analyzer import (
+            fetch_commits,
+            fetch_contributors,
+            fetch_file,
+            fetch_tree,
+            parse_github_url,
+        )
+
+        parsed = parse_github_url(project.github_url)
+        if not parsed:
+            return f"Невалидный GitHub URL: {project.github_url}"
+
+        owner, repo = parsed
+        token = ""
+        try:
+            from src.core.config import settings
+            token = settings.github_token
+        except Exception:
+            pass
+
+        if query_type == "summary":
+            # Use cached data from parsed_content["github"]
+            pc = project.parsed_content if isinstance(project.parsed_content, dict) else {}
+            gh = pc.get("github")
+            if not gh:
+                return (
+                    f"GitHub-метрики для {project.title} ещё не собраны. "
+                    "Запустите scripts/analyze_github.py"
+                )
+
+            lines = [f"GitHub: {gh.get('full_name', f'{owner}/{repo}')}\n"]
+            lines.append(f"Звезды: {gh.get('stars', 0)} | Форки: {gh.get('forks_count', 0)}")
+            lines.append(
+                f"Коммитов: {gh.get('total_commits', '?')} | "
+                f"Контрибьюторов: {gh.get('contributors_count', '?')}"
+            )
+            if gh.get("primary_language"):
+                lines.append(f"Язык: {gh['primary_language']}")
+            lines.append(f"Последний пуш: {gh.get('days_since_last_push', '?')} дней назад")
+            lines.append(f"Возраст: {gh.get('repo_age_days', '?')} дней")
+            lines.append(
+                f"Тесты: {'есть' if gh.get('has_tests') else 'нет'} | "
+                f"CI: {'есть' if gh.get('has_ci') else 'нет'} | "
+                f"Docker: {'есть' if gh.get('has_docker') else 'нет'}"
+            )
+            if gh.get("license"):
+                lines.append(f"Лицензия: {gh['license']}")
+            lines.append(f"Health score: {gh.get('health_score', '?')}/100")
+
+            if gh.get("contributors"):
+                lines.append("\nКонтрибьюторы:")
+                for c in gh["contributors"][:5]:
+                    lines.append(f"  {c['login']}: {c['contributions']} ({c['percentage']}%)")
+
+            flags = gh.get("red_flags", [])
+            if flags:
+                lines.append("\nRed flags:")
+                for f in flags:
+                    lines.append(f"  [{f.get('severity', '?')}] {f.get('description', '?')}")
+
+            return "\n".join(lines)
+
+        # Real-time drill-down via gh CLI
+        try:
+            if query_type == "file":
+                return await asyncio.wait_for(
+                    fetch_file(owner, repo, file_path, token), timeout=15.0,
+                )
+            elif query_type == "tree":
+                return await asyncio.wait_for(
+                    fetch_tree(owner, repo, token, file_path or ""), timeout=15.0,
+                )
+            elif query_type == "commits":
+                return await asyncio.wait_for(
+                    fetch_commits(owner, repo, token), timeout=15.0,
+                )
+            elif query_type == "contributors":
+                return await asyncio.wait_for(
+                    fetch_contributors(owner, repo, token), timeout=15.0,
+                )
+        except asyncio.TimeoutError:
+            return "GitHub не ответил в течение 15 секунд."
+        except Exception as e:
+            logger.error("GitHub drilldown error: %s", e)
+            return f"Ошибка при получении данных: {e}"
+
+        return "Неизвестная ошибка"
 
 
 # ---------------------------------------------------------------------------

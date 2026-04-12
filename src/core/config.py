@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     embedding_model: str = "google/gemini-embedding-001"
     openrouter_api_key: str = ""  # for standalone mode (no llm-agent-platform)
 
+    # GitHub
+    github_token: str = ""  # GitHub token for API access via gh CLI
+
     # Organizer
     organizer_chat_id: int = 0
 
