@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.sanitize import sanitize_text
 from src.models.support_log import SupportLog
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ async def create_support_entry(
         user_id=user_id,
         event_id=event_id,
         correlation_id=generate_correlation_id(),
-        question=question[:1000],  # max 1000 chars
+        question=(sanitize_text(question) or "")[:1000],  # max 1000 chars
     )
     db.add(entry)
     await db.flush()

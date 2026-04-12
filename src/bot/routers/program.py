@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent.agent import AgentDeps, create_agent
 from src.core.config import settings
+from src.core.sanitize import sanitize_text
 from src.bot.keyboards.program import detail_keyboard, program_keyboard
 from src.bot.states import BotStates
 from src.models.chat_message import ChatMessage
@@ -194,11 +195,12 @@ async def view_program_text(
         recs = list(recs_result.scalars().all())
 
     # Save user message to chat history
+    safe_text = sanitize_text(message.text) or ""
     chat_msg = ChatMessage(
         user_id=UUID(user_id),
         event_id=UUID(event_id),
         role="user",
-        content=message.text,
+        content=safe_text,
     )
     db.add(chat_msg)
     await db.flush()
@@ -260,7 +262,7 @@ async def view_program_text(
         user_id=UUID(user_id),
         event_id=UUID(event_id),
         role="assistant",
-        content=reply_text,
+        content=sanitize_text(reply_text) or reply_text,
     )
     db.add(assistant_msg)
     await db.flush()

@@ -134,6 +134,7 @@ def _get_dp_and_bot() -> tuple[Dispatcher, MockedBot]:
     from src.bot.routers.detail import router as detail_router
     from src.bot.routers.support import router as support_router
     from src.bot.routers.program import router as program_router
+    from src.bot.routers.fallback import router as fallback_router
 
     # Registration order matches main.py
     _dp.include_router(start_router)
@@ -142,6 +143,7 @@ def _get_dp_and_bot() -> tuple[Dispatcher, MockedBot]:
     _dp.include_router(detail_router)
     _dp.include_router(support_router)
     _dp.include_router(program_router)
+    _dp.include_router(fallback_router)
 
     return _dp, _bot
 
@@ -168,6 +170,13 @@ async def db():
 @pytest_asyncio.fixture
 async def seed(db: AsyncSession):
     """Seed event + rooms + projects + schedule slots."""
+    # Deactivate any pre-existing active events so tests see only the seed event
+    from sqlalchemy import update as sa_update
+    await db.execute(
+        sa_update(Event).where(Event.is_active.is_(True)).values(is_active=False)
+    )
+    await db.flush()
+
     event = Event(
         id=uuid4(),
         name="Test Demo Day",
@@ -381,6 +390,13 @@ class TestStartRouter:
     @pytest.mark.asyncio
     async def test_start_no_active_event(self, db: AsyncSession):
         """No active event -> error message, no state transition."""
+        # Deactivate any pre-existing events so the test sees no active ones
+        from sqlalchemy import update as sa_update
+        await db.execute(
+            sa_update(Event).where(Event.is_active.is_(True)).values(is_active=False)
+        )
+        await db.flush()
+
         dp, bot = _setup_dp(db)
         uid = 9002
 
@@ -995,7 +1011,7 @@ class TestProgramRouter:
         with patch("src.bot.routers.program.create_agent") as mock_create:
             mock_agent = AsyncMock()
             mock_result = MagicMock()
-            mock_result.data = "Вот ваши рекомендации по NLP проектам."
+            mock_result.output = "Вот ваши рекомендации по NLP проектам."
             mock_agent.run = AsyncMock(return_value=mock_result)
             mock_create.return_value = mock_agent
 

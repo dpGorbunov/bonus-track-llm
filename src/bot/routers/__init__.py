@@ -5,6 +5,7 @@ from src.bot.routers.detail import router as detail_router
 from src.bot.routers.support import router as support_router
 from src.bot.routers.support import group_router as support_group_router
 from src.bot.routers.expert import router as expert_router
+from src.bot.routers.fallback import router as fallback_router
 
 __all__ = [
     "start_router",
@@ -14,4 +15,5 @@ __all__ = [
     "support_router",
     "support_group_router",
     "expert_router",
+    "fallback_router",
 ]

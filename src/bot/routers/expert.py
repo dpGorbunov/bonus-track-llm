@@ -24,6 +24,7 @@ from src.bot.keyboards.expert import (
     score_keyboard,
 )
 from src.bot.states import BotStates
+from src.core.sanitize import sanitize_text
 from src.models.event import Event
 from src.models.expert import Expert
 from src.models.project import Project
@@ -312,7 +313,7 @@ async def eval_comment_text(message: Message, state: FSMContext) -> None:
         await message.answer("Используйте кнопки для оценки.")
         return
 
-    comment = message.text.strip()
+    comment = sanitize_text(message.text)
     if comment == "-":
         comment = None
 

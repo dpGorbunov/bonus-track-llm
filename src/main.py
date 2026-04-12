@@ -31,6 +31,7 @@ from src.bot.middlewares import (
 from src.bot.routers import (
     detail_router,
     expert_router,
+    fallback_router,
     profiling_router,
     program_router,
     start_router,
@@ -123,13 +124,16 @@ async def main() -> None:
     # expert handles expert_dashboard + expert_evaluation states.
     # detail handles view_detail state.
     # support handles support_chat state.
-    # program handles view_program state (broadest text handler, goes last).
+    # program handles view_program state (broadest text handler).
+    # fallback_router MUST be last: global /help, /support, /rebuild,
+    # catch-all for messages without state, and stale callbacks.
     dp.include_router(start_router)
     dp.include_router(profiling_router)
     dp.include_router(expert_router)
     dp.include_router(detail_router)
     dp.include_router(support_router)
     dp.include_router(program_router)
+    dp.include_router(fallback_router)
 
     # Group router for organizer replies (separate chat)
     if settings.organizer_chat_id:

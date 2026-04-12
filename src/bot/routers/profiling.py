@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.bot.keyboards.program import confirm_profile_keyboard, program_keyboard
 from src.bot.states import BotStates
+from src.core.sanitize import sanitize_text
 from src.models.event import Event
 from src.models.guest_profile import GuestProfile
 from src.models.project import Project
@@ -168,10 +169,10 @@ async def profile_confirm(
         event_id=UUID(event_id),
         selected_tags=interests,
         keywords=goals,
-        nl_summary=summary,
-        raw_text=raw_text,
-        company=company,
-        position=position,
+        nl_summary=sanitize_text(summary),
+        raw_text=sanitize_text(raw_text),
+        company=sanitize_text(company),
+        position=sanitize_text(position),
         objective=goals[0] if goals else None,
         business_objectives=business_objectives,
     )
