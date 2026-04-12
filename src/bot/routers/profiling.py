@@ -55,11 +55,19 @@ async def nl_profile_text(
 
     # Load user for role context
     result = await db.execute(select(User).where(User.id == UUID(user_id)))
-    user = result.scalar_one()
+    user = result.scalar_one_or_none()
+    if not user:
+        await message.answer("Сессия устарела. Используйте /start.")
+        await state.clear()
+        return
 
     # Load event for tag list
     event_result = await db.execute(select(Event).where(Event.id == event_id))
-    event = event_result.scalar_one()
+    event = event_result.scalar_one_or_none()
+    if not event:
+        await message.answer("Мероприятие не найдено. Используйте /start.")
+        await state.clear()
+        return
 
     # Build tag list from event projects
     tag_list = await _get_tag_list(db, UUID(event_id))
@@ -231,6 +239,12 @@ async def profile_retry(
     await callback.message.edit_text(
         "Давайте попробуем заново. Расскажите о ваших интересах."
     )
+
+
+@router.message(BotStates.onboard_confirm)
+async def onboard_confirm_text(message: Message, state: FSMContext) -> None:
+    """Catch text in onboard_confirm - prompt to use buttons."""
+    await message.answer("Нажмите кнопку 'Все верно' или 'Заново' выше.")
 
 
 async def trigger_recommendations(

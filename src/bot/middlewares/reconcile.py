@@ -88,7 +88,7 @@ class ReconcileMiddleware(BaseMiddleware):
         profile_result = await db.execute(
             select(GuestProfile).where(GuestProfile.user_id == db_user.id)
         )
-        profile = profile_result.scalar_one_or_none()
+        profile = profile_result.scalars().first()
         if profile and current is None:
             await state.set_state(BotStates.view_program)
             logger.info("Reconciled user %s -> view_program", tg_user_id)

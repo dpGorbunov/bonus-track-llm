@@ -83,7 +83,7 @@ async def cmd_start(message: Message, state: FSMContext, db: AsyncSession) -> No
             GuestProfile.event_id == event.id,
         )
     )
-    profile = profile_result.scalar_one_or_none()
+    profile = profile_result.scalars().first()
     if profile:
         await _return_to_program(message, state, db, profile, event)
         return

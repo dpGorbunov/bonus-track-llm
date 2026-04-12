@@ -68,11 +68,23 @@ async def cmd_rebuild(
     message: Message, state: FSMContext, db: AsyncSession
 ) -> None:
     """Clear profile and restart profiling."""
+    from sqlalchemy import delete
+
+    state_data = await state.get_data()
+    profile_id = state_data.get("profile_id")
+
+    # Delete old recommendations and profile from DB
+    if profile_id:
+        await db.execute(delete(Recommendation).where(Recommendation.profile_id == UUID(profile_id)))
+        await db.execute(delete(GuestProfile).where(GuestProfile.id == UUID(profile_id)))
+        await db.flush()
+
     await state.update_data(
         nl_conversation=[],
         nl_turn=0,
         extracted_profile=None,
         program_chat=[],
+        profile_id=None,
     )
     await state.set_state(BotStates.onboard_nl_profile)
     await message.answer("Давайте пересоздадим профиль. Расскажите о ваших интересах.")
@@ -194,8 +206,14 @@ async def view_program_text(
         )
         recs = list(recs_result.scalars().all())
 
+    # Truncate long messages
+    user_text = message.text or ""
+    if len(user_text) > 2000:
+        user_text = user_text[:2000]
+        await message.answer("Сообщение обрезано до 2000 символов.")
+
     # Save user message to chat history
-    safe_text = sanitize_text(message.text) or ""
+    safe_text = sanitize_text(user_text) or ""
     chat_msg = ChatMessage(
         user_id=UUID(user_id),
         event_id=UUID(event_id),
