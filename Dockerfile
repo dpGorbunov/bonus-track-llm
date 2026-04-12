@@ -9,6 +9,7 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY src/ src/
 COPY scripts/ scripts/
+COPY fonts/ fonts/
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 EXPOSE 8080
 CMD ["python", "-m", "src.main"]

@@ -1,11 +1,13 @@
 """Tool implementations for the EventAI PydanticAI agent.
 
-Five tools:
-- show_project    -- show details of one recommended project
-- show_profile    -- show current user profile
+Seven tools:
+- show_project     -- show details of one recommended project (by rank or name)
+- show_profile     -- show current user profile
 - compare_projects -- compare 2-5 projects via LLM-generated matrix
 - generate_questions -- generate Q&A questions for a project
-- get_summary     -- follow-up (guest) or pipeline (business)
+- update_status    -- update project status in business pipeline
+- filter_projects  -- filter recommended projects by tag or technology
+- get_summary      -- follow-up (guest) or pipeline (business)
 """
 
 import asyncio
@@ -13,7 +15,7 @@ import json
 import logging
 
 from pydantic_ai import Agent, RunContext
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from src.agent.agent import AgentDeps
 from src.models.business_followup import BusinessFollowup
@@ -24,22 +26,50 @@ logger = logging.getLogger(__name__)
 
 
 def register_tools(agent: Agent[AgentDeps, str]) -> None:
-    """Register all 5 tools on the given agent instance."""
+    """Register all 7 tools on the given agent instance."""
 
     @agent.tool
-    async def show_project(ctx: RunContext[AgentDeps], project_rank: int) -> str:
-        """Показать детали проекта по номеру в рекомендациях."""
+    async def show_project(
+        ctx: RunContext[AgentDeps], project_identifier: str
+    ) -> str:
+        """Показать детали проекта по номеру или названию."""
         deps = ctx.deps
-        rec = _find_recommendation(deps.recommendations, project_rank)
+
+        # Try rank first
+        rec = None
+        try:
+            rank = int(project_identifier.strip().lstrip("#"))
+            rec = _find_recommendation(deps.recommendations, rank)
+        except ValueError:
+            pass
+
+        # Fallback: search by name among recommended projects
         if not rec:
-            return f"Проект #{project_rank} не найден в рекомендациях."
+            name_lower = project_identifier.strip().lower()
+            project_ids = [r.project_id for r in deps.recommendations]
+            if project_ids:
+                result = await deps.db.execute(
+                    select(Project).where(
+                        Project.id.in_(project_ids),
+                        func.lower(Project.title).contains(name_lower),
+                    )
+                )
+                matched = result.scalars().first()
+                if matched:
+                    rec = next(
+                        (r for r in deps.recommendations if r.project_id == matched.id),
+                        None,
+                    )
+
+        if not rec:
+            return f"Проект '{project_identifier}' не найден в рекомендациях."
 
         result = await deps.db.execute(
             select(Project).where(Project.id == rec.project_id)
         )
         project = result.scalar_one_or_none()
         if not project:
-            return f"Проект #{project_rank} не найден."
+            return f"Проект '{project_identifier}' не найден."
 
         return _format_project_card(project, rec)
 
@@ -182,6 +212,85 @@ def register_tools(agent: Agent[AgentDeps, str]) -> None:
             return "Не удалось сгенерировать вопросы. Попробуйте позже."
 
     @agent.tool
+    async def update_status(
+        ctx: RunContext[AgentDeps], project_rank: int, status: str
+    ) -> str:
+        """Обновить статус проекта в пайплайне. Только для бизнес-партнеров.
+        Допустимые статусы: interested, contacted, meeting_scheduled, rejected, in_progress."""
+        deps = ctx.deps
+        if deps.user.role_code != "business":
+            return "Эта функция доступна только бизнес-пользователям."
+
+        VALID = {"interested", "contacted", "meeting_scheduled", "rejected", "in_progress"}
+        if status not in VALID:
+            return f"Допустимые статусы: {', '.join(sorted(VALID))}"
+
+        rec = _find_recommendation(deps.recommendations, project_rank)
+        if not rec:
+            return f"Проект #{project_rank} не найден."
+
+        result = await deps.db.execute(
+            select(BusinessFollowup).where(
+                BusinessFollowup.user_id == deps.user.id,
+                BusinessFollowup.event_id == deps.event.id,
+                BusinessFollowup.project_id == rec.project_id,
+            )
+        )
+        followup = result.scalar_one_or_none()
+        if followup:
+            old = followup.status
+            followup.status = status
+            await deps.db.flush()
+            return f"Статус проекта #{project_rank} изменен: {old} -> {status}"
+        else:
+            new = BusinessFollowup(
+                user_id=deps.user.id,
+                event_id=deps.event.id,
+                project_id=rec.project_id,
+                status=status,
+            )
+            deps.db.add(new)
+            await deps.db.flush()
+            return f"Проект #{project_rank} добавлен в пайплайн: {status}"
+
+    @agent.tool
+    async def filter_projects(ctx: RunContext[AgentDeps], tag: str) -> str:
+        """Отфильтровать рекомендованные проекты по тегу или технологии."""
+        deps = ctx.deps
+        if not deps.recommendations:
+            return "Нет рекомендаций. Используйте /rebuild."
+
+        tag_lower = tag.strip().lower()
+        matched: list[tuple[Recommendation, Project]] = []
+
+        # Load all recommended projects in one query
+        project_ids = [r.project_id for r in deps.recommendations]
+        result = await deps.db.execute(
+            select(Project).where(Project.id.in_(project_ids))
+        )
+        projects = {p.id: p for p in result.scalars().all()}
+
+        for rec in deps.recommendations:
+            project = projects.get(rec.project_id)
+            if not project:
+                continue
+            project_tags = [t.lower() for t in (project.tags or [])]
+            project_stack = [t.lower() for t in (project.tech_stack or [])]
+            if tag_lower in project_tags or tag_lower in project_stack:
+                matched.append((rec, project))
+
+        if not matched:
+            return f"Нет проектов с тегом '{tag}' в ваших рекомендациях."
+
+        lines = [f"Проекты с тегом '{tag}' ({len(matched)}):\n"]
+        for rec, project in matched:
+            lines.append(f"#{rec.rank} {project.title}")
+            tags_str = ", ".join(project.tags[:3]) if project.tags else ""
+            if tags_str:
+                lines.append(f"   {tags_str}")
+        return "\n".join(lines)
+
+    @agent.tool
     async def get_summary(ctx: RunContext[AgentDeps]) -> str:
         """Итоги. Гости: follow-up (контакты + шаблон). Бизнес: pipeline (статусы)."""
         deps = ctx.deps
@@ -227,7 +336,7 @@ def _get_default_criteria(is_business: bool) -> list[str]:
 def _format_project_card(project: Project, rec: Recommendation) -> str:
     """Format a single project into a readable card."""
     lines = [
-        f"#{rec.rank} {project.title} ({rec.relevance_score:.0f}%)\n",
+        f"#{rec.rank} {project.title}\n",
         project.description[:300],
     ]
     if project.tags:
@@ -316,7 +425,23 @@ async def _get_pipeline(deps: AgentDeps) -> str:
         project = result.scalar_one_or_none()
         if project:
             lines.append(f"[{f.status}] {project.title}")
+            if project.telegram_contact:
+                lines.append(f"  Контакт: {project.telegram_contact}")
             if f.notes:
                 lines.append(f"  {f.notes[:50]}")
+
+    company = deps.profile.company if deps.profile and deps.profile.company else "[название компании]"
+
+    lines.append("\nШаблоны для связи:")
+    lines.append("")
+    lines.append("Первое обращение:")
+    lines.append(f"Здравствуйте! Представляю компанию {company}.")
+    lines.append("Видели ваш проект [название проекта] на Demo Day.")
+    lines.append("Интересует обсуждение возможного сотрудничества.")
+    lines.append("Удобно будет созвониться на этой неделе?")
+    lines.append("")
+    lines.append("Повторное обращение:")
+    lines.append("Добрый день! Мы общались на Demo Day по проекту [название].")
+    lines.append("Хотел(а) бы уточнить детали для запуска пилота.")
 
     return "\n".join(lines)

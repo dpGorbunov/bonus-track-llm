@@ -18,7 +18,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.bot.keyboards.program import program_keyboard, support_back_keyboard
+from src.bot.keyboards.program import program_keyboard, project_buttons_keyboard, support_back_keyboard
 from src.bot.states import BotStates
 from src.core.config import settings
 from src.models.recommendation import Recommendation
@@ -144,8 +144,9 @@ async def cb_support_back(
         if recs:
             from src.bot.routers.program import format_program
 
-            text = await format_program(recs, db)
-            await callback.message.answer(text, reply_markup=program_keyboard())
+            text, project_list = await format_program(recs, db)
+            keyboard = project_buttons_keyboard(project_list) if project_list else program_keyboard()
+            await callback.message.answer(text, reply_markup=keyboard)
             return
 
     await callback.message.answer(

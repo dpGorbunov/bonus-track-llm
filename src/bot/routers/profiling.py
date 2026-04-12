@@ -19,7 +19,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.bot.keyboards.program import confirm_profile_keyboard, program_keyboard
+from src.bot.keyboards.program import confirm_profile_keyboard, program_keyboard, project_buttons_keyboard
 from src.bot.states import BotStates
 from src.core.sanitize import sanitize_text
 from src.models.event import Event
@@ -214,10 +214,11 @@ async def profile_confirm(
     if recs:
         from src.bot.routers.program import format_program
 
-        text = await format_program(recs, db)
+        text, project_list = await format_program(recs, db)
+        keyboard = project_buttons_keyboard(project_list) if project_list else program_keyboard()
         await callback.message.answer(
             text,
-            reply_markup=program_keyboard(),
+            reply_markup=keyboard,
         )
     else:
         await callback.message.answer(
@@ -293,10 +294,11 @@ async def trigger_recommendations(
     if recs:
         from src.bot.routers.program import format_program
 
-        text = await format_program(recs, db)
+        text, project_list = await format_program(recs, db)
+        keyboard = project_buttons_keyboard(project_list) if project_list else program_keyboard()
         await message.answer(
             text,
-            reply_markup=program_keyboard(),
+            reply_markup=keyboard,
         )
     else:
         await message.answer(

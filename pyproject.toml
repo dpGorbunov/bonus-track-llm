@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings",
     "aiohttp",
     "telegramify-markdown>=1.1",
+    "fpdf2>=2.8",
 ]
 
 [project.optional-dependencies]

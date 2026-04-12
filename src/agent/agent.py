@@ -108,5 +108,5 @@ def _format_recommendations(recs: list[Recommendation]) -> str:
 
     lines: list[str] = []
     for rec in recs:
-        lines.append(f"#{rec.rank} (score: {rec.relevance_score:.0f}%)")
+        lines.append(f"#{rec.rank}")
     return "\n".join(lines)

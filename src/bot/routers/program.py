@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.agent.agent import AgentDeps, create_agent
 from src.core.config import settings
 from src.core.sanitize import sanitize_text
-from src.bot.keyboards.program import detail_keyboard, program_keyboard
+from src.bot.keyboards.program import detail_keyboard, program_keyboard, project_buttons_keyboard
 from src.bot.states import BotStates
 from src.models.chat_message import ChatMessage
 from src.models.event import Event
@@ -155,8 +155,68 @@ async def cb_if_time(
         await callback.message.answer("Нет дополнительных рекомендаций.")
         return
 
-    text = await format_program(recs, db, header="Если успеете:")
+    text, _ = await format_program(recs, db, header="Если успеете:")
     await callback.message.answer(text)
+
+
+@router.callback_query(BotStates.view_program, F.data.startswith("project:"))
+async def cb_project_detail(
+    callback: CallbackQuery, state: FSMContext, db: AsyncSession
+) -> None:
+    """Open project detail by inline button."""
+    await callback.answer()
+    rank = int(callback.data.split(":")[1])
+    from src.bot.routers.detail import show_project_detail
+
+    await show_project_detail(callback, state, db, rank)
+
+
+@router.callback_query(BotStates.view_program, F.data == "cmd:export_pdf")
+async def cb_export_pdf(
+    callback: CallbackQuery, state: FSMContext, db: AsyncSession
+) -> None:
+    """Export recommendations as PDF document."""
+    await callback.answer("Генерирую PDF...")
+
+    state_data = await state.get_data()
+    profile_id = state_data.get("profile_id")
+    user_id = state_data.get("user_id")
+
+    if not profile_id:
+        await callback.message.answer("Нет рекомендаций для экспорта.")
+        return
+
+    recs_result = await db.execute(
+        select(Recommendation)
+        .where(Recommendation.profile_id == UUID(profile_id))
+        .order_by(Recommendation.rank)
+    )
+    recs = list(recs_result.scalars().all())
+
+    if not recs:
+        await callback.message.answer("Нет рекомендаций для экспорта.")
+        return
+
+    project_ids = [r.project_id for r in recs]
+    proj_result = await db.execute(
+        select(Project).where(Project.id.in_(project_ids))
+    )
+    projects = list(proj_result.scalars().all())
+
+    # Get user name
+    user_name = "Участник"
+    if user_id:
+        user_result = await db.execute(select(User).where(User.id == UUID(user_id)))
+        user = user_result.scalar_one_or_none()
+        if user:
+            user_name = user.full_name
+
+    from src.services.pdf_export import generate_recommendations_pdf
+    from aiogram.types import BufferedInputFile
+
+    pdf_buf = await generate_recommendations_pdf(recs, projects, user_name=user_name)
+    doc = BufferedInputFile(pdf_buf.read(), filename="demo_day_program.pdf")
+    await callback.message.answer_document(doc, caption="Ваша программа Demo Day")
 
 
 @router.message(BotStates.view_program, F.text)
@@ -302,9 +362,13 @@ async def format_program(
     recs: list[Recommendation],
     db: AsyncSession,
     header: str = "Ваша программа:",
-) -> str:
-    """Format recommendations list with schedule info."""
+) -> tuple[str, list[tuple[int, str]]]:
+    """Format recommendations list with schedule info.
+
+    Returns (text, [(rank, title), ...]).
+    """
     lines = [header, ""]
+    project_list: list[tuple[int, str]] = []
 
     for rec in recs:
         # Load project
@@ -314,6 +378,8 @@ async def format_program(
         project = proj_result.scalar_one_or_none()
         if not project:
             continue
+
+        project_list.append((rec.rank, project.title))
 
         # Load schedule slot
         slot_info = ""
@@ -335,13 +401,12 @@ async def format_program(
             category_marker = " [если успеете]"
 
         tags = ", ".join(project.tags[:3]) if project.tags else ""
-        score = f"{rec.relevance_score:.0f}%"
 
-        lines.append(f"#{rec.rank} {project.title} ({score}){slot_info}{category_marker}")
+        lines.append(f"#{rec.rank} {project.title}{slot_info}{category_marker}")
         if tags:
             lines.append(f"   {tags}")
 
-    return "\n".join(lines)
+    return "\n".join(lines), project_list
 
 
 def _format_profile_text(profile: GuestProfile) -> str:

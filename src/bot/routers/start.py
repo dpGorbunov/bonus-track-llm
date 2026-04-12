@@ -16,7 +16,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.bot.keyboards.program import program_keyboard
+from src.bot.keyboards.program import program_keyboard, project_buttons_keyboard
 from src.bot.keyboards.roles import role_keyboard
 from src.bot.states import BotStates
 from src.models.event import Event
@@ -151,10 +151,11 @@ async def _return_to_program(
     if recs:
         from src.bot.routers.program import format_program
 
-        text = await format_program(recs, db)
+        text, project_list = await format_program(recs, db)
+        keyboard = project_buttons_keyboard(project_list) if project_list else program_keyboard()
         await message.answer(
             f"С возвращением!\n\n{text}",
-            reply_markup=program_keyboard(),
+            reply_markup=keyboard,
         )
     else:
         await message.answer(
