@@ -180,6 +180,31 @@ def display_response(method: TelegramMethod):
             print(f"{YELLOW}  (popup) {method.text}{RESET}")
 
 
+def _display_pipe(method: TelegramMethod):
+    """Clean output for pipe mode (no ANSI, structured for parsing)."""
+    if isinstance(method, SendMessage):
+        text = method.text or ""
+        print(f"BOT: {text}", flush=True)
+        if method.reply_markup and hasattr(method.reply_markup, "inline_keyboard"):
+            for row in method.reply_markup.inline_keyboard:
+                for btn in row:
+                    print(f"BUTTON: [{btn.text}] @{btn.callback_data}", flush=True)
+
+    elif isinstance(method, EditMessageText):
+        text = method.text or ""
+        print(f"BOT_EDIT: {text}", flush=True)
+        if method.reply_markup and hasattr(method.reply_markup, "inline_keyboard"):
+            for row in method.reply_markup.inline_keyboard:
+                for btn in row:
+                    print(f"BUTTON: [{btn.text}] @{btn.callback_data}", flush=True)
+
+    elif isinstance(method, AnswerCallbackQuery):
+        if method.text:
+            print(f"POPUP: {method.text}", flush=True)
+
+    print("---", flush=True)
+
+
 async def setup_dispatcher(bot: CLIBot) -> Dispatcher:
     """Set up dispatcher with all routers and middlewares."""
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
@@ -259,23 +284,42 @@ async def setup_dispatcher(bot: CLIBot) -> Dispatcher:
     return dp
 
 
+PIPE_MODE = "--pipe" in sys.argv or not sys.stdin.isatty()
+
+
+def _print(text: str):
+    """Print with or without ANSI colors."""
+    if PIPE_MODE:
+        # Strip ANSI codes for pipe mode
+        import re
+        text = re.sub(r'\033\[[0-9;]*m', '', text)
+    print(text, flush=True)
+
+
 async def main():
-    print(f"\n{BOLD}EventAI Bot - CLI тестирование{RESET}")
-    print(f"{DIM}Команды: /start, /help, /support, /rebuild, /profile{RESET}")
-    print(f"{DIM}Кнопки:  @callback_data (например @role:guest:student){RESET}")
-    print(f"{DIM}Инфо:    !state, !data, !quit{RESET}")
-    print(f"{DIM}{'='*50}{RESET}\n")
+    if not PIPE_MODE:
+        _print(f"\n{BOLD}EventAI Bot - CLI тестирование{RESET}")
+        _print(f"{DIM}Команды: /start, /help, /support, /rebuild, /profile{RESET}")
+        _print(f"{DIM}Кнопки:  @callback_data (например @role:guest:student){RESET}")
+        _print(f"{DIM}Инфо:    !state, !data, !quit{RESET}")
+        _print(f"{DIM}{'='*50}{RESET}\n")
 
     bot = CLIBot()
     dp = await setup_dispatcher(bot)
     await dp.emit_startup()
+
+    if PIPE_MODE:
+        _print("BOT_READY")
 
     msg_counter = 0
 
     try:
         while True:
             try:
-                user_input = input(f"\n{CYAN}You:{RESET} ").strip()
+                if PIPE_MODE:
+                    user_input = input().strip()
+                else:
+                    user_input = input(f"\n{CYAN}You:{RESET} ").strip()
             except (EOFError, KeyboardInterrupt):
                 break
 
@@ -289,13 +333,12 @@ async def main():
             if user_input == "!state":
                 state = dp.fsm.get_context(bot, user_id=USER_ID, chat_id=CHAT_ID)
                 current = await state.get_state()
-                print(f"{DIM}  FSM state: {current or '(none)'}{RESET}")
+                _print(f"STATE: {current or '(none)'}")
                 continue
 
             if user_input == "!data":
                 state = dp.fsm.get_context(bot, user_id=USER_ID, chat_id=CHAT_ID)
                 data = await state.get_data()
-                # Truncate long values
                 display_data = {}
                 for k, v in data.items():
                     if isinstance(v, list) and len(v) > 3:
@@ -305,10 +348,11 @@ async def main():
                     else:
                         display_data[k] = v
                 import json
-                print(f"{DIM}  FSM data: {json.dumps(display_data, indent=2, default=str, ensure_ascii=False)}{RESET}")
+                _print(f"DATA: {json.dumps(display_data, default=str, ensure_ascii=False)}")
                 continue
 
             msg_counter += 1
+            _print(f"YOU: {user_input}")
 
             # Callback (button press)
             if user_input.startswith("@"):
@@ -321,13 +365,16 @@ async def main():
             try:
                 await dp.feed_update(bot, update)
             except Exception as e:
-                print(f"\n{YELLOW}Error: {e}{RESET}")
+                _print(f"ERROR: {e}")
                 logger.exception("Handler error")
 
             # Display captured responses
             messages = bot.drain_messages()
             for method in messages:
-                display_response(method)
+                if PIPE_MODE:
+                    _display_pipe(method)
+                else:
+                    display_response(method)
 
     finally:
         await dp.emit_shutdown()
