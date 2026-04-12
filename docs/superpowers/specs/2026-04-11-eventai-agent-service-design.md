@@ -11,7 +11,7 @@
 ```
 bonus-track-llm (EventAI Agent)
   aiogram 3.x (transport, FSM, 8 states)
-    PydanticAI Agent (single-turn, 5 tools)
+    PydanticAI Agent (single-turn, 7 tools)
     Commands: /start, /help, /support, /profile, /rebuild
   Services
     PlatformClient -> llm-agent-platform
@@ -51,7 +51,7 @@ llm-agent-platform (отдельный репо)
 | Celery + RabbitMQ | 200 users, все LLM-вызовы I/O-bound. asyncio + semaphore(10) + wait_for(timeout) проще и достаточно |
 | Qdrant | 330 проектов * 768d = 1MB. pgvector в том же PostgreSQL. Минус контейнер, 256MB RAM |
 | Alembic | Overhead для PoC. schema.sql - фиксированная схема, запускается один раз |
-| ReAct multi-turn | 5 tools, single-turn. Multi-turn = лишний latency и cost |
+| ReAct multi-turn | 7 tools, single-turn. Multi-turn = лишний latency и cost |
 | Walking penalty | Marginal improvement. conflict_penalty + room_bonus покрывают 95% |
 | Expert slot selection | Организатор назначает зал при invite |
 
@@ -148,7 +148,7 @@ PydanticAI: reasoning (один LLM-вызов, tool selection, response)
 
 FSM transitions -> aiogram commands. Информационные запросы -> PydanticAI.
 
-### 5 tools
+### 7 tools
 
 ```python
 @agent.tool
@@ -171,8 +171,17 @@ async def generate_questions(ctx: RunContext[AgentDeps], project_rank: int) -> l
 
 @agent.tool
 async def get_summary(ctx: RunContext[AgentDeps]) -> str:
-    """Итоги. Гости: follow-up (контакты + шаблон). Бизнес: pipeline (статусы).
+    """Итоги. Гости: follow-up (контакты + шаблон). Бизнес: pipeline (статусы + контакты + шаблоны для связи).
     Адаптируется под роль автоматически."""
+
+@agent.tool
+async def update_status(ctx: RunContext[AgentDeps], project_rank: int, status: str) -> str:
+    """Обновить статус проекта в пайплайне. Только для бизнес-партнеров.
+    Статусы: interested, contacted, meeting_scheduled, rejected, in_progress."""
+
+@agent.tool
+async def filter_projects(ctx: RunContext[AgentDeps], tag: str) -> str:
+    """Отфильтровать рекомендованные проекты по тегу или технологии."""
 ```
 
 ### Structured vs pre-formatted
@@ -183,7 +192,9 @@ async def get_summary(ctx: RunContext[AgentDeps]) -> str:
 | show_profile | `str` (Markdown) | Фиксированный формат |
 | compare_projects | `ComparisonMatrix` | LLM генерирует матрицу (один вызов). PydanticAI получает structured result и форматирует в текст для Telegram (не второй LLM-вызов, а шаблонное форматирование в handler) |
 | generate_questions | `list[str]` | Список, форматируется в handler |
-| get_summary | `str` (Markdown) | Фиксированный формат |
+| get_summary | `str` (Markdown) | Фиксированный формат (pipeline с контактами + шаблоны для бизнеса) |
+| update_status | `str` | Бизнес-only. Upsert BusinessFollowup |
+| filter_projects | `str` | Case-insensitive поиск по tags и tech_stack в рекомендациях |
 
 ### Error handling
 
@@ -212,7 +223,7 @@ class AgentDeps:
 | Компонент | Токены | Примечание |
 |-----------|--------|------------|
 | System prompt | ~500 | |
-| Tool schemas (5 tools) | ~1500 | |
+| Tool schemas (7 tools) | ~2100 | update_status + filter_projects добавлены |
 | Profile info | ~200 | |
 | Recommendations (top-15, без summaries) | ~1500 | title + tags + room + time. Без LLM summaries |
 | Chat history (до 20 msg) | ~3000 | tool results: краткая выжимка (title + tags), не полный результат. Хранится в PostgreSQL (chat_messages table), не в Redis |
@@ -231,7 +242,7 @@ async def handle_agent_message(message: Message, state: FSMContext,
     try:
         result = await asyncio.wait_for(
             agent.run(message.text, deps=deps, message_history=data.get("chat_history", [])),
-            timeout=15.0
+            timeout=settings.agent_timeout  # default 45.0
         )
     except (asyncio.TimeoutError, Exception):
         await message.answer("Бот временно не может обработать запрос. Команды /profile и кнопки работают.")
@@ -651,7 +662,7 @@ async def llm_with_limit(coro):
     except asyncio.TimeoutError:
         raise SystemError("Слишком много запросов, попробуйте через минуту")
     try:
-        return await asyncio.wait_for(coro, timeout=15.0)
+        return await asyncio.wait_for(coro, timeout=settings.agent_timeout  # default 45.0)
     finally:
         _semaphore.release()
 ```
@@ -765,7 +776,7 @@ bonus-track-llm/
         reconcile.py    # FSM/DB state reconciliation
       keyboards/
     agent/
-      agent.py          # PydanticAI Agent (single-turn, 5 tools)
+      agent.py          # PydanticAI Agent (single-turn, 7 tools)
       tools.py          # tool implementations
       platform_model.py # PydanticAI Model adapter
       prompts.py        # system prompt builder
@@ -781,13 +792,22 @@ bonus-track-llm/
     prompts/            # LLM prompt templates
     core/
       config.py
-      database.py       # async engine
+      database.py          # async engine
+      sanitize.py          # null-byte removal for DB writes
+      telegram_format.py   # telegramify-markdown -> entities
     main.py
+  services/
+    pdf_export.py          # fpdf2 PDF generation with DejaVu fonts
   scripts/
-    schema.sql          # DDL + pgvector extension
-    seed.sql            # events, roles
-    import_projects.py  # CSV/JSON -> projects + rooms + schedule
-    parse_artifacts.py  # PPTX/PDF/GitHub -> structured extraction
+    schema.sql             # DDL + pgvector extension
+    seed.sql               # events, roles
+    cli_bot.py             # interactive CLI for manual testing
+    chat.py                # stateful chat for agent testing (--session=)
+    import_projects.py     # CSV/JSON -> projects + rooms + schedule
+    parse_artifacts.py     # PPTX/PDF/GitHub -> structured extraction
+  fonts/
+    DejaVuSans.ttf         # Cyrillic font for PDF
+    DejaVuSans-Bold.ttf
   tests/
   Dockerfile
   docker-compose.yml
@@ -809,7 +829,9 @@ tenacity
 python-pptx
 pymupdf
 pydantic-settings
-aiohttp           # health endpoint
+aiohttp                    # health endpoint
+telegramify-markdown>=1.1  # LLM markdown -> Telegram entities
+fpdf2>=2.8                 # PDF export with Cyrillic (DejaVu fonts)
 ```
 
 ## Implementation Decisions
@@ -824,7 +846,7 @@ llm-agent-platform предоставляет OpenAI-совместимый API 
 from pydantic_ai.models.openai import OpenAIModel
 
 platform_model = OpenAIModel(
-    model_name="openai/gpt-5.1",
+    model_name="deepseek/deepseek-v3.2",
     base_url=f"{PLATFORM_URL}/v1",
     api_key=agent_token,  # полученный при register()
 )
@@ -868,7 +890,7 @@ async def handle_questions(callback: CallbackQuery, platform: PlatformClient):
     project = get_current_project(callback)
     questions = await asyncio.wait_for(
         generate_questions_direct(platform, project, user),
-        timeout=15.0
+        timeout=settings.agent_timeout  # default 45.0
     )
     await callback.message.answer(format_questions(questions))
 ```
@@ -922,7 +944,7 @@ class ComparisonMatrix(BaseModel):
 
 Конфигурация через .env:
 ```
-LLM_MODEL=openai/gpt-5.1
+LLM_MODEL=deepseek/deepseek-v3.2
 EMBEDDING_MODEL=google/gemini-embedding-001
 ```
 
