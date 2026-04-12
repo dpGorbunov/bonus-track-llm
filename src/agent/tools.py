@@ -115,8 +115,7 @@ def register_tools(agent: Agent[AgentDeps, str]) -> None:
         is_business = deps.user.role_code == "business"
         criteria = _get_default_criteria(is_business)
         projects_text = "\n".join(
-            f"- {p.title}: {p.description[:200]}. Стек: {', '.join(p.tech_stack or [])}"
-            for p in projects
+            _build_project_context(p) for p in projects
         )
 
         system_prompt, user_prompt = build_comparison_matrix_prompt(
@@ -160,6 +159,9 @@ def register_tools(agent: Agent[AgentDeps, str]) -> None:
 
         from src.prompts.qa import build_business_qa_prompt, build_guest_qa_prompt
 
+        # Enrich description with artifact context
+        enriched_desc = _build_project_context(project, max_desc=500)
+
         if deps.user.role_code == "business":
             system_prompt, user_prompt = build_business_qa_prompt(
                 objective=(
@@ -172,7 +174,7 @@ def register_tools(agent: Agent[AgentDeps, str]) -> None:
                 ),
                 tech_stack=", ".join(project.tech_stack or []),
                 project_title=project.title,
-                project_description=project.description[:500],
+                project_description=enriched_desc,
                 project_tech_stack=", ".join(project.tech_stack or []),
             )
         else:
@@ -184,7 +186,7 @@ def register_tools(agent: Agent[AgentDeps, str]) -> None:
                     else ""
                 ),
                 project_title=project.title,
-                project_description=project.description[:500],
+                project_description=enriched_desc,
                 project_tech_stack=", ".join(project.tech_stack or []),
             )
 
@@ -333,6 +335,29 @@ def _get_default_criteria(is_business: bool) -> list[str]:
     ]
 
 
+def _build_project_context(project: Project, max_desc: int = 200) -> str:
+    """Build rich text context including artifact data."""
+    parts = [f"- {project.title}: {project.description[:max_desc]}"]
+    if project.tech_stack:
+        parts.append(f"  Стек: {', '.join(project.tech_stack)}")
+
+    pc = project.parsed_content if isinstance(project.parsed_content, dict) else None
+    if pc:
+        if pc.get("problem"):
+            parts.append(f"  Проблема: {pc['problem']}")
+        if pc.get("solution"):
+            parts.append(f"  Решение: {pc['solution']}")
+        if pc.get("key_metrics"):
+            parts.append(f"  Метрики: {', '.join(pc['key_metrics'])}")
+        if pc.get("novelty"):
+            parts.append(f"  Новизна: {pc['novelty']}")
+        if pc.get("risks"):
+            parts.append(f"  Риски: {pc['risks']}")
+        if pc.get("production_readiness"):
+            parts.append(f"  Готовность: {pc['production_readiness']}")
+    return "\n".join(parts)
+
+
 def _format_project_card(project: Project, rec: Recommendation) -> str:
     """Format a single project into a readable card."""
     lines = [
@@ -350,8 +375,25 @@ def _format_project_card(project: Project, rec: Recommendation) -> str:
             lines.append(f"\nПроблема: {pc['problem']}")
         if pc.get("solution"):
             lines.append(f"Решение: {pc['solution']}")
+        if pc.get("audience"):
+            lines.append(f"Аудитория: {pc['audience']}")
         if pc.get("novelty"):
             lines.append(f"Новизна: {pc['novelty']}")
+        if pc.get("key_metrics"):
+            lines.append(f"Метрики: {', '.join(pc['key_metrics'])}")
+        if pc.get("production_readiness"):
+            lines.append(f"Готовность: {pc['production_readiness']}")
+        if pc.get("risks"):
+            lines.append(f"Риски: {pc['risks']}")
+        red_flags = pc.get("red_flags")
+        if red_flags:
+            flags_text = "; ".join(
+                f"{f['description']} ({f['severity']})"
+                for f in red_flags
+                if isinstance(f, dict)
+            )
+            if flags_text:
+                lines.append(f"Red flags: {flags_text}")
 
     if project.author:
         lines.append(f"\nАвтор: {project.author}")

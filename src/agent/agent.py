@@ -139,6 +139,9 @@ def _format_recommendations(recs: list[Recommendation], projects: dict | None = 
                 line += f" | теги: {tags}"
             if stack:
                 line += f" | стек: {stack}"
+            pc = project.parsed_content if isinstance(project.parsed_content, dict) else None
+            if pc and pc.get("problem"):
+                line += f" | проблема: {pc['problem'][:80]}"
             lines.append(line)
         else:
             lines.append(f"#{rec.rank}")

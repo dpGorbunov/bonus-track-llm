@@ -101,6 +101,11 @@ async def _auto_seed() -> None:
             except Exception as e:
                 logger.warning("Auto-embedding failed (tag overlap will be used): %s", e)
 
+            try:
+                await _auto_parse_artifacts(db)
+            except Exception as e:
+                logger.warning("Auto artifact parsing failed: %s", e)
+
 
 async def _embed_demo_projects(db) -> None:
     """Embed demo projects via OpenRouter for pgvector search."""
@@ -141,6 +146,67 @@ async def _embed_demo_projects(db) -> None:
 
     await db.commit()
     logger.info("All projects embedded")
+
+
+async def _auto_parse_artifacts(db) -> None:
+    """Extract structured data from artifacts for projects with NULL parsed_content."""
+    from sqlalchemy import select
+    from src.models.project import Project
+    from src.services.artifact_parser import (
+        extract_structured,
+        parse_github_readme,
+        parse_presentation,
+    )
+    from pydantic import SecretStr
+
+    result = await db.execute(
+        select(Project).where(Project.parsed_content.is_(None))
+    )
+    projects = result.scalars().all()
+
+    if not projects:
+        return
+
+    logger.info("Parsing artifacts for %d projects...", len(projects))
+
+    platform = PlatformClient("https://openrouter.ai/api", "unused")
+    platform._token = SecretStr(settings.openrouter_api_key)
+
+    try:
+        for project in projects:
+            raw_parts: list[str] = []
+
+            if project.presentation_url:
+                try:
+                    text = await parse_presentation(project.presentation_url)
+                    if text:
+                        raw_parts.append(text)
+                except Exception as e:
+                    logger.warning("Presentation parse failed for %s: %s", project.title, e)
+
+            if project.github_url:
+                try:
+                    readme = await parse_github_readme(project.github_url)
+                    if readme:
+                        raw_parts.append(f"GitHub README:\n{readme}")
+                except Exception as e:
+                    logger.warning("GitHub parse failed for %s: %s", project.title, e)
+
+            raw_text = "\n\n".join(raw_parts) if raw_parts else project.description
+
+            extraction = await extract_structured(
+                raw_text, project.title, project.description, platform
+            )
+
+            if extraction:
+                project.parsed_content = extraction
+                await db.flush()
+                logger.info("  Parsed artifact: %s", project.title)
+
+        await db.commit()
+        logger.info("Artifact parsing complete")
+    finally:
+        await platform.close()
 
 
 async def main() -> None:
