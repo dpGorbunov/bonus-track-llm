@@ -51,15 +51,20 @@ async def generate_recommendations_pdf(
         pdf.set_font("DejaVu", "", 10)
 
         if project.description:
-            pdf.multi_cell(0, 6, project.description[:300])
+            pdf.multi_cell(0, 6, project.description[:300], new_x="LMARGIN", new_y="NEXT")
+        meta_lines = []
         if project.tags:
-            pdf.cell(0, 6, f"Теги: {', '.join(project.tags)}", new_x="LMARGIN", new_y="NEXT")
+            meta_lines.append(f"Теги: {', '.join(str(t) for t in project.tags)}")
         if project.tech_stack:
-            pdf.cell(0, 6, f"Стек: {', '.join(project.tech_stack)}", new_x="LMARGIN", new_y="NEXT")
+            meta_lines.append(f"Стек: {', '.join(str(t) for t in project.tech_stack)}")
         if project.author:
-            pdf.cell(0, 6, f"Автор: {project.author}", new_x="LMARGIN", new_y="NEXT")
+            meta_lines.append(f"Автор: {project.author}")
         if project.telegram_contact:
-            pdf.cell(0, 6, f"Контакт: {project.telegram_contact}", new_x="LMARGIN", new_y="NEXT")
+            meta_lines.append(f"Контакт: {project.telegram_contact}")
+        if meta_lines:
+            pdf.set_font("DejaVu", "", 9)
+            pdf.multi_cell(0, 5, "\n".join(meta_lines), new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("DejaVu", "", 10)
         pdf.ln(3)
 
     buf = io.BytesIO()
