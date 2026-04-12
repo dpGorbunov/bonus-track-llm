@@ -252,6 +252,10 @@ async def setup_dispatcher(bot: CLIBot) -> Dispatcher:
     dp.include_router(support_router)
     dp.include_router(program_router)
 
+    # Fallback router MUST be last
+    from src.bot.routers.fallback import router as fallback_router
+    dp.include_router(fallback_router)
+
     return dp
 
 
