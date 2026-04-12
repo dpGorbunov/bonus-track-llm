@@ -386,7 +386,7 @@ async def _get_followup(deps: AgentDeps) -> str:
         project = result.scalar_one_or_none()
         if project:
             contact = (
-                f" | @{project.telegram_contact}" if project.telegram_contact else ""
+                f" | {project.telegram_contact}" if project.telegram_contact else ""
             )
             lines.append(f"#{rec.rank} {project.title}{contact}")
 

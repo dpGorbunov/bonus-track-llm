@@ -165,7 +165,11 @@ async def cb_project_detail(
 ) -> None:
     """Open project detail by inline button."""
     await callback.answer()
-    rank = int(callback.data.split(":")[1])
+    try:
+        rank = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.message.answer("Неверный номер проекта.")
+        return
     from src.bot.routers.detail import show_project_detail
 
     await show_project_detail(callback, state, db, rank)

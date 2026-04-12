@@ -127,7 +127,7 @@ async def show_project_detail(
     if project.author:
         card_lines.append(f"\nАвтор: {project.author}")
     if project.telegram_contact:
-        card_lines.append(f"Контакт: @{project.telegram_contact}")
+        card_lines.append(f"Контакт: {project.telegram_contact}")
     if project.github_url:
         card_lines.append(f"GitHub: {project.github_url}")
     if project.presentation_url:
