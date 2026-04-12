@@ -111,22 +111,30 @@ async def extract_structured(
         f"Проект: {project_title}\n"
         f"Описание: {project_description}\n\n"
         f"Текст из артефактов (презентация/README):\n{raw_text[:5000]}\n\n"
-        "Извлеки структурированную информацию. "
+        "Извлеки информацию в ТОЧНО таком JSON формате:\n"
+        "{\n"
+        '  "problem": "какую проблему решает (1-2 предложения)",\n'
+        '  "solution": "как решает (1-2 предложения)",\n'
+        '  "audience": "для кого",\n'
+        '  "stack": ["Python", "PyTorch"],\n'
+        '  "novelty": "в чем новизна",\n'
+        '  "risks": "ограничения или null",\n'
+        '  "key_metrics": ["accuracy 94%", "F1=0.91", "1000 rps"] или null,\n'
+        '  "production_readiness": "prototype" или "mvp" или "production" или null,\n'
+        '  "team_size": число или null,\n'
+        '  "red_flags": [{"category": "metric", "description": "текст", "severity": "low"}] или null\n'
+        "}\n\n"
         "ПРАВИЛА:\n"
+        "- Поля problem, solution, audience, stack, novelty ОБЯЗАТЕЛЬНЫ\n"
+        "- key_metrics - СПИСОК СТРОК, не словарь\n"
         "- Извлекай ТОЛЬКО то, что ЯВНО указано в тексте\n"
-        "- Если данных нет - ставь null\n"
-        "- key_metrics: конкретные числа (accuracy, F1, latency, MAU)\n"
-        "- red_flags: несоответствия, нереалистичные заявления. "
-        "Каждый flag: {category, description, severity}\n"
-        "- production_readiness: prototype | mvp | production\n"
-        "- stack: технологии из текста (не из описания проекта)\n"
-        "Ответь строго JSON."
+        "- Если данных нет - null (кроме обязательных полей)"
     )
 
     system = (
         "Ты аналитик студенческих AI-проектов. "
-        "Извлекай факты из текста презентаций и README. "
-        "НЕ выдумывай данные. Если информации нет - null."
+        "Извлекай факты строго в указанном JSON формате. "
+        "НЕ выдумывай данные. НЕ добавляй свои поля. НЕ меняй имена полей."
     )
 
     try:
@@ -139,8 +147,29 @@ async def extract_structured(
         )
         content = resp["choices"][0]["message"]["content"]
         data = json.loads(content)
-        extraction = ProjectExtraction(**data)
-        return extraction.model_dump()
+
+        # Fix common LLM mistakes before validation
+        if isinstance(data.get("key_metrics"), dict):
+            # LLM returned dict instead of list - convert to list of strings
+            data["key_metrics"] = [
+                f"{k}: {v}" for k, v in data["key_metrics"].items() if v is not None
+            ]
+        if data.get("stack") is None:
+            data["stack"] = []
+
+        try:
+            extraction = ProjectExtraction(**data)
+            return extraction.model_dump()
+        except Exception:
+            # Validation failed - store raw data as-is (JSONB accepts any dict)
+            logger.warning("Validation partial for %s, storing raw", project_title)
+            # Ensure minimum required fields
+            data.setdefault("problem", project_description[:100])
+            data.setdefault("solution", "Не извлечено")
+            data.setdefault("audience", "Не указано")
+            data.setdefault("stack", [])
+            data.setdefault("novelty", "Не извлечено")
+            return data
     except Exception as e:
         logger.error("Structured extraction failed for %s: %s", project_title, e)
         return {}
