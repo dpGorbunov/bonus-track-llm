@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Limits
     rate_limit_per_minute: int = 10
     semaphore_limit: int = 10
-    agent_timeout: float = 15.0
+    agent_timeout: float = 45.0
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
