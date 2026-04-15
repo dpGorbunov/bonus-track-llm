@@ -11,6 +11,17 @@ Telegram-бот с AI-агентом для навигации по Demo Day AI 
 
 Агент использует llm-agent-platform как LLM proxy: все chat completions и embeddings идут через платформу с метриками, трейсами, circuit breaker и guardrails.
 
+### Развернутые сервисы (85.198.96.191)
+
+| Сервис | URL |
+|--------|-----|
+| Telegram-бот | [@demoday_ai_talent_hub_test_bot](https://t.me/demoday_ai_talent_hub_test_bot) |
+| LLM Platform API | http://85.198.96.191:8000 |
+| Grafana (метрики) | http://85.198.96.191:3002 (admin/admin) |
+| Prometheus | http://85.198.96.191:9090 |
+| Langfuse (трейсы) | http://85.198.96.191:3001 |
+| Bot health | http://85.198.96.191:8080/health |
+
 ## Задача
 
 Demo Day AI Talent Hub (ИТМО) - 330 проектов, 10 залов, 2 дня. Проблемы:
