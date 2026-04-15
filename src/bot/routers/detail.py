@@ -287,7 +287,31 @@ async def cb_generate_questions(
         await callback.message.answer("\n".join(lines))
 
     except json.JSONDecodeError:
-        logger.error("Q&A LLM returned non-JSON")
+        # LLM sometimes returns JSON wrapped in markdown or plain text
+        logger.warning("Q&A LLM returned non-JSON, attempting fallback parse")
+        # Try extract JSON from ```json ... ``` block
+        import re
+        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group(1))
+                questions = data.get("questions", [])
+                if questions:
+                    lines = [f"Вопросы для проекта #{project_rank}:", f"{project.title}", ""]
+                    for i, q in enumerate(questions[:5], 1):
+                        lines.append(f"{i}. {q}")
+                    await callback.message.answer("\n".join(lines))
+                    return
+            except json.JSONDecodeError:
+                pass
+        # Last resort: extract numbered lines as questions
+        numbered = re.findall(r"\d+\.\s*(.+)", content)
+        if numbered:
+            lines = [f"Вопросы для проекта #{project_rank}:", f"{project.title}", ""]
+            for i, q in enumerate(numbered[:5], 1):
+                lines.append(f"{i}. {q}")
+            await callback.message.answer("\n".join(lines))
+            return
         await callback.message.answer("Не удалось сгенерировать вопросы.")
     except Exception as e:
         logger.error("Q&A generation failed: %s", e)
