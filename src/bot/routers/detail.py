@@ -287,31 +287,26 @@ async def cb_generate_questions(
         await callback.message.answer("\n".join(lines))
 
     except json.JSONDecodeError:
-        # LLM sometimes returns JSON wrapped in markdown or plain text
-        logger.warning("Q&A LLM returned non-JSON, attempting fallback parse")
-        # Try extract JSON from ```json ... ``` block
-        import re
-        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(1))
-                questions = data.get("questions", [])
-                if questions:
-                    lines = [f"Вопросы для проекта #{project_rank}:", f"{project.title}", ""]
-                    for i, q in enumerate(questions[:5], 1):
-                        lines.append(f"{i}. {q}")
-                    await callback.message.answer("\n".join(lines))
-                    return
-            except json.JSONDecodeError:
-                pass
-        # Last resort: extract numbered lines as questions
-        numbered = re.findall(r"\d+\.\s*(.+)", content)
-        if numbered:
-            lines = [f"Вопросы для проекта #{project_rank}:", f"{project.title}", ""]
-            for i, q in enumerate(numbered[:5], 1):
-                lines.append(f"{i}. {q}")
-            await callback.message.answer("\n".join(lines))
-            return
+        # LLM returned non-JSON - retry with formatting instruction
+        logger.warning("Q&A LLM returned non-JSON, retrying with format fix")
+        try:
+            fix_resp = await platform.chat_completion(
+                messages=[
+                    {"role": "system", "content": "Преобразуй текст в JSON: {\"questions\": [\"вопрос1\", \"вопрос2\", ...]}"},
+                    {"role": "user", "content": content},
+                ],
+                response_format={"type": "json_object"},
+            )
+            fix_data = json.loads(fix_resp["choices"][0]["message"]["content"])
+            questions = fix_data.get("questions", [])
+            if questions:
+                lines = [f"Вопросы для проекта #{project_rank}:", f"{project.title}", ""]
+                for i, q in enumerate(questions[:5], 1):
+                    lines.append(f"{i}. {q}")
+                await callback.message.answer("\n".join(lines))
+                return
+        except Exception:
+            pass
         await callback.message.answer("Не удалось сгенерировать вопросы.")
     except Exception as e:
         logger.error("Q&A generation failed: %s", e)

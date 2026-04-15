@@ -18,5 +18,9 @@ class PlatformMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        # Set session_id from telegram user for Langfuse trace grouping
+        user = data.get("event_from_user")
+        if user:
+            self.platform.current_session_id = f"tg-{user.id}"
         data["platform"] = self.platform
         return await handler(event, data)

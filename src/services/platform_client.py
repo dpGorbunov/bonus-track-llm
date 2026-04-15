@@ -24,6 +24,7 @@ class PlatformClient:
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10))
         self._register_attempts = 0
         self._last_register_time = 0.0
+        self.current_session_id: str | None = None
 
     @property
     def token(self) -> str:
@@ -62,8 +63,9 @@ class PlatformClient:
         """Make authenticated request. Auto-reregister on 401."""
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self.token}"
-        if session_id:
-            headers["X-Session-Id"] = session_id
+        sid = session_id or self.current_session_id
+        if sid:
+            headers["X-Session-Id"] = sid
 
         resp = await self._client.request(method, f"{self.platform_url}{path}", headers=headers, **kwargs)
 
